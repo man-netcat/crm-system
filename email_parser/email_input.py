@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from .auth import AuthProvider
+
 
 def from_text(text: str) -> str:
     return text.strip()
@@ -82,6 +84,7 @@ class IMAPWatcher:
         use_ssl: bool = True,
         interval: int = 60,
         on_email: Callable[[dict], None] | None = None,
+        auth_provider: AuthProvider | None = None,
     ):
         self.server = server
         self.user = user
@@ -91,6 +94,7 @@ class IMAPWatcher:
         self.use_ssl = use_ssl
         self.interval = interval
         self.on_email = on_email
+        self.auth_provider = auth_provider
         self.seen_ids: set[bytes] = set()
 
     def _connect(self):
@@ -110,7 +114,11 @@ class IMAPWatcher:
 
     def _check(self):
         mail = self._connect()
-        mail.login(self.user, self.password)
+        authenticator = self.auth_provider.get_authenticator() if self.auth_provider else None
+        if authenticator:
+            mail.authenticate("XOAUTH2", authenticator)
+        else:
+            mail.login(self.user, self.password)
         mail.select(self.folder)
 
         status, ids = mail.search(None, "ALL")

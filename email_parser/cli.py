@@ -8,6 +8,7 @@ from .schema import SchemaDef
 from .db import create_database, insert_extracted, query_data
 from .extractor import extract_from_email, generate_schema_from_prompt
 from .email_input import from_text, from_eml, from_stdin, IMAPWatcher
+from .auth import PlainAuth, OAuth2DeviceAuth
 
 
 @click.group()
@@ -84,9 +85,27 @@ def parse(schema_file, text, filepath, read_stdin, model, ollama_host):
 
 
 @cli.command()
+@click.option("--provider", "-p", required=True, help="Auth provider (gmail, outlook)")
+@click.option("--user", "-u", help="Email address (will prompt if not provided)")
+def connect(provider, user):
+    """Authorize with an OAuth2 provider and store credentials for later use."""
+    try:
+        auth = OAuth2DeviceAuth(provider, email=user)
+    except RuntimeError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"\nConnected as {auth.get_username()}")
+    click.echo(f"Provider: {auth.name()}")
+    click.echo(f"IMAP: {auth.imap_server}:{auth.imap_port}")
+    click.echo("\nCredentials saved. You can now use:")
+    click.echo(f"  email-parser watch <schema.yaml> --provider {auth.name()} --user {auth.get_username()}")
+
+
+@cli.command()
 @click.argument("schema_file", type=click.Path(exists=True))
-@click.option("--server", required=True, help="IMAP server address")
-@click.option("--user", required=True, help="IMAP username")
+@click.option("--provider", help="Auth provider (gmail, outlook) — overrides --server/--user/--password")
+@click.option("--server", help="IMAP server address (required without --provider)")
+@click.option("--user", help="IMAP username")
 @click.option("--password", help="IMAP password (defaults to IMAP_PASSWORD env var)")
 @click.option("--port", default=993, type=int, show_default=True, help="IMAP server port")
 @click.option("--no-ssl", "use_ssl", flag_value=False, default=True, help="Disable SSL (use plain IMAP)")
@@ -94,13 +113,26 @@ def parse(schema_file, text, filepath, read_stdin, model, ollama_host):
 @click.option("--interval", default=60, type=int, show_default=True, help="Poll interval in seconds")
 @click.option("--model", "-m", default="llama3.2", show_default=True, help="Ollama model name")
 @click.option("--ollama-host", default="http://localhost:11434", show_default=True, help="Ollama server URL")
-def watch(schema_file, server, user, password, port, use_ssl, folder, interval, model, ollama_host):
+def watch(schema_file, provider, server, user, password, port, use_ssl, folder, interval, model, ollama_host):
     """Watch an IMAP inbox and extract data from incoming emails."""
     schema = SchemaDef.from_yaml(schema_file)
-    password = password or os.environ.get("IMAP_PASSWORD")
-    if not password:
-        click.echo("Password required via --password or IMAP_PASSWORD env var", err=True)
-        sys.exit(1)
+    auth_provider = None
+
+    if provider:
+        auth_provider = OAuth2DeviceAuth(provider, email=user)
+        user = auth_provider.get_username()
+        server = auth_provider.imap_server
+        port = auth_provider.imap_port
+        use_ssl = auth_provider.use_ssl
+    else:
+        if not server:
+            click.echo("Either --provider or --server is required.", err=True)
+            sys.exit(1)
+        password = password or os.environ.get("IMAP_PASSWORD")
+        if not password:
+            click.echo("Password required via --password or IMAP_PASSWORD env var", err=True)
+            sys.exit(1)
+        auth_provider = PlainAuth(user or "", password) if password else None
 
     def process_email(email_data: dict):
         body = email_data.get("body", "")
@@ -118,13 +150,14 @@ def watch(schema_file, server, user, password, port, use_ssl, folder, interval, 
 
     watcher = IMAPWatcher(
         server=server,
-        user=user,
-        password=password,
+        user=user or "",
+        password=password or "",
         folder=folder,
         port=port,
         use_ssl=use_ssl,
         interval=interval,
         on_email=process_email,
+        auth_provider=auth_provider,
     )
     watcher.run()
 
