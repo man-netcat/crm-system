@@ -1,0 +1,53 @@
+database: job_applications.db
+tables:
+- name: applicants
+  description: Applicant information
+  columns:
+  - name: full_name
+    type: TEXT
+    required: true
+  - name: email
+    type: TEXT
+    required: true
+  - name: phone_number
+    type: TEXT
+    required: false
+- name: job_positions
+  description: Job positions
+  columns:
+  - name: position_name
+    type: TEXT
+    required: true
+  - name: min_experience
+    type: INTEGER
+    required: false
+- name: job_applications
+  description: Job applications
+  columns:
+  - name: applicant_id
+    type: INTEGER
+    foreign_key:
+      table: applicants
+      column: id
+    required: true
+  - name: job_position_id
+    type: INTEGER
+    foreign_key:
+      table: job_positions
+      column: id
+    required: true
+  - name: salary_expectations
+    type: TEXT
+    required: false
+- name: skills
+  description: Applicant skills
+  columns:
+  - name: applicant_id
+    type: INTEGER
+    foreign_key:
+      table: applicants
+      column: id
+    required: true
+  - name: skill_name
+    type: TEXT
+    required: true
