@@ -29,7 +29,19 @@ def _new_db():
     create_database(SCHEMA)
 
 
-def run_test(name: str, eml_path: str | Path, expect_tables: list[str] | None = None):
+def run_test(name: str, eml_path: str | Path,
+             expect_tables: list[str] | None = None,
+             expect_scores: dict | None = None):
+    """Run an edge case extraction test.
+
+    Args:
+        name: test label
+        eml_path: path to .eml file
+        expect_tables: if set, require these tables to have non-null data
+        expect_scores: dict with optional keys:
+            min_certainty (float), max_spam (float) for legitimate content
+            or max_certainty (float), min_spam (float) for garbage/no-match
+    """
     global passed, failed
     print(f"\n=== {name} ===", flush=True)
     _new_db()
@@ -66,6 +78,33 @@ def run_test(name: str, eml_path: str | Path, expect_tables: list[str] | None = 
     spam = result.get("spam", 0.5)
     print(f"  extracted: {json.dumps(extracted, indent=2)}", flush=True)
     print(f"  certainty: {certainty:.2f}, spam: {spam:.2f}", flush=True)
+
+    if expect_scores:
+        min_cert = expect_scores.get("min_certainty")
+        max_cert = expect_scores.get("max_certainty")
+        min_sp = expect_scores.get("min_spam")
+        max_sp = expect_scores.get("max_spam")
+
+        if min_cert is not None and certainty < min_cert:
+            print(f"  FAIL: certainty {certainty:.2f} < min {min_cert}", flush=True)
+            failed += 1
+            results.append((name, "FAIL", f"certainty {certainty:.2f} < {min_cert}"))
+            return
+        if max_cert is not None and certainty > max_cert:
+            print(f"  FAIL: certainty {certainty:.2f} > max {max_cert}", flush=True)
+            failed += 1
+            results.append((name, "FAIL", f"certainty {certainty:.2f} > {max_cert}"))
+            return
+        if min_sp is not None and spam < min_sp:
+            print(f"  FAIL: spam {spam:.2f} < min {min_sp}", flush=True)
+            failed += 1
+            results.append((name, "FAIL", f"spam {spam:.2f} < {min_sp}"))
+            return
+        if max_sp is not None and spam > max_sp:
+            print(f"  FAIL: spam {spam:.2f} > max {max_sp}", flush=True)
+            failed += 1
+            results.append((name, "FAIL", f"spam {spam:.2f} > {max_sp}"))
+            return
 
     if expect_tables is not None:
         missing = []
@@ -111,29 +150,39 @@ if __name__ == "__main__":
     # 1. Empty body
     run_test("empty body", EML_DIR / "empty.eml")
 
-    # 2. Irrelevant content
-    run_test("irrelevant content", EML_DIR / "recipe.eml", expect_tables=[])
+    # 2. Irrelevant content (recipe) → low certainty, high spam
+    run_test("irrelevant content", EML_DIR / "recipe.eml",
+             expect_tables=[],
+             expect_scores={"max_certainty": 0.4, "min_spam": 0.5})
 
-    # 3. Multiple records (AI may skip companies, leads should still not crash)
-    run_test("multiple records", EML_DIR / "multi_lead.eml")
+    # 3. Multiple records → legitimate leads, high certainty, low spam
+    run_test("multiple records", EML_DIR / "multi_lead.eml",
+             expect_scores={"min_certainty": 0.5, "max_spam": 0.5})
 
     # 4. Partial data — company only
     run_test("company only", EML_DIR / "company_only.eml",
-         expect_tables=["companies"])
+             expect_tables=["companies"],
+             expect_scores={"min_certainty": 0.3, "max_spam": 0.5})
 
     # 5. Unicode / special chars
     run_test("unicode", EML_DIR / "unicode.eml",
-         expect_tables=["companies", "leads"])
+             expect_tables=["companies", "leads"],
+             expect_scores={"min_certainty": 0.4, "max_spam": 0.5})
 
     # 6. Minimal data
     run_test("minimal data", EML_DIR / "minimal.eml",
-         expect_tables=["companies"])
+             expect_tables=["companies"],
+             expect_scores={"min_certainty": 0.2, "max_spam": 0.6})
 
-    # 7. No matching data at all
-    run_test("no match", EML_DIR / "no_match.eml", expect_tables=[])
+    # 7. No matching data at all → low certainty
+    run_test("no match", EML_DIR / "no_match.eml",
+             expect_tables=[],
+             expect_scores={"max_certainty": 0.4, "min_spam": 0.3})
 
-    # 8. Garbage / binary body
-    run_test("garbage body", EML_DIR / "garbage.eml", expect_tables=[])
+    # 8. Garbage / binary body → very low certainty, very high spam
+    run_test("garbage body", EML_DIR / "garbage.eml",
+             expect_tables=[],
+             expect_scores={"max_certainty": 0.2, "min_spam": 0.7})
 
     # Summary
     print(f"\n{'='*40}")

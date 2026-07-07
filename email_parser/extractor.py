@@ -53,54 +53,65 @@ Generate a YAML schema in this EXACT format (this is a valid example, follow the
 
 database: emails.db
 tables:
-  - name: suppliers
-    description: "Supplier companies"
+  - name: projects
+    description: "Projects"
     columns:
-      - name: company_name
+      - name: project_name
         type: TEXT
-        description: "Company name"
+        description: "Project name"
         required: true
-      - name: contact_person
+      - name: lead_name
         type: TEXT
-        description: "Contact person"
+        description: "Project lead"
         required: false
-  - name: orders
-    description: "Orders placed"
+  - name: milestones
+    description: "Milestones within a project"
     columns:
-      - name: customer_id
+      - name: project_id
         type: INTEGER
-        description: "FK to customers.id"
+        description: "FK to projects.id"
         foreign_key:
-          table: customers
+          table: projects
           column: id
         required: true
-      - name: delivery_date
+      - name: milestone_name
+        type: TEXT
+        description: "Milestone name"
+        required: true
+      - name: due_date
         type: DATE
-        description: "Delivery date"
+        description: "Due date"
         required: false
-  - name: order_items
-    description: "Line items"
+  - name: tasks
+    description: "Individual tasks"
     columns:
-      - name: order_id
+      - name: milestone_id
         type: INTEGER
-        description: "FK to orders"
+        description: "FK to milestones"
         foreign_key:
-          table: orders
+          table: milestones
           column: id
         required: true
-      - name: product_name
+      - name: task_name
         type: TEXT
-        description: "Product name"
+        description: "Task name"
         required: true
-      - name: quantity
-        type: INTEGER
-        description: "Quantity"
+      - name: assignee
+        type: TEXT
+        description: "Assigned person"
         required: false
 
 Rules:
-- 2 to 4 tables max, no join/lookup tables
-- Each table gets auto-generated id (do NOT include it)
-- All foreign_key references must use column: id (never reference non-id columns)
+- 2 to 3 tables max — each table must be a distinct real-world entity (e.g. customers, orders, products)
+- Each table gets auto-generated id (do NOT include it in columns)
+- Every foreign_key must reference another table's id column:
+    foreign_key:
+      table: <table_name>
+      column: id
+  column: id is MANDATORY — never reference name, email, or any non-id column
+- Foreign key column names should end with _id (e.g. project_id, client_id)
+- Only create tables that the user explicitly mentions in their requirements
+- NEVER create join/lookup tables, relationship tables, status-history tables, or extra tables that are not explicitly described
 - Follow the YAML structure above exactly — including the nesting and quoting style
 - Output ONLY valid YAML — no markdown fences, no explanations"""
 
@@ -109,45 +120,107 @@ def generate_schema_from_prompt(
     prompt: str,
     model: str = "llama3.2",
     ollama_host: str = "http://localhost:11434",
+    max_retries: int = 2,
 ) -> str:
     import ollama
+    import yaml
 
     client = ollama.Client(host=ollama_host)
-    response = client.chat(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a database designer. Output only valid YAML, no explanations.",
-            },
-            {
-                "role": "user",
-                "content": SCHEMA_PROMPT.format(prompt=prompt),
-            },
-        ],
-        options={"temperature": 0.3},
+
+    system_msg = (
+        "You are a database designer. Output only valid YAML, no explanations. "
+        "Every foreign_key MUST reference column: id — never use any other column."
     )
-    content = response["message"]["content"]
 
-    yaml_match = re.search(r"```(?:yaml|yml)?\s*\n(.*?)\n```", content, re.DOTALL)
-    if yaml_match:
-        content = yaml_match.group(1)
+    for attempt in range(1 + max_retries):
+        response = client.chat(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_msg,
+                },
+                {
+                    "role": "user",
+                    "content": SCHEMA_PROMPT.format(prompt=prompt),
+                },
+            ],
+            options={"temperature": 0.1},
+        )
+        content = response["message"]["content"]
 
-    content = content.strip()
-    if not content.startswith("database:"):
-        raise ValueError(
-            "AI did not return a valid schema. Response:\n" + content[:500]
-        )
-    import yaml
-    try:
-        data = yaml.safe_load(content)
-    except yaml.YAMLError as e:
-        raise ValueError(
-            f"AI generated invalid YAML:\n---\n{content[:1000]}\n---\nParser error: {e}"
-        )
-    for table in data.get("tables", []):
-        table["columns"] = [c for c in table.get("columns", []) if c.get("name") != "id"]
-    return yaml.dump(data, default_flow_style=False, sort_keys=False).strip() + "\n"
+        # Strip markdown fences
+        content = re.sub(r'^```(?:yaml|yml)?\s*\n?', '', content, count=1)
+        content = re.sub(r'\n?```\s*$', '', content, count=1)
+
+        content = content.strip()
+        if not content.startswith("database:"):
+            if attempt < max_retries:
+                continue
+            raise ValueError(
+                "AI did not return a valid schema. Response:\n" + content[:500]
+            )
+
+        try:
+            data = yaml.safe_load(content)
+        except yaml.YAMLError as e:
+            if attempt < max_retries:
+                continue
+            raise ValueError(
+                f"AI generated invalid YAML after {1 + max_retries} attempts:\n"
+                f"---\n{content[:1000]}\n---\nParser error: {e}"
+            )
+
+        if not isinstance(data, dict) or "tables" not in data:
+            if attempt < max_retries:
+                continue
+            raise ValueError(
+                f"AI generated YAML without tables:\n---\n{content[:500]}\n---"
+            )
+
+        # 1. Deduplicate tables by name
+        seen_names = set()
+        tables = []
+        for table in data.get("tables", []):
+            name = table.get("name", "")
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            tables.append(table)
+
+        # 2. Fix FKs: force column=id, strip references to non-existent tables
+        table_names = {t["name"] for t in tables}
+        bad_fk_cols = set()
+        for table in tables:
+            for col in table.get("columns", []):
+                fk = col.get("foreign_key")
+                if fk:
+                    fk["column"] = "id"
+                    if fk.get("table") not in table_names:
+                        del col["foreign_key"]
+                        bad_fk_cols.add((table["name"], col["name"]))
+
+        # 4. Filter columns (remove id, auto-ID heuristic)
+        for table in tables:
+            filtered = []
+            for c in table.get("columns", []):
+                name_col = c.get("name", "")
+                if not name_col or name_col == "id":
+                    continue
+                # INTEGER *_id without FK and not a stripped-bad-FK column → auto-ID
+                if (name_col.endswith("_id") and not c.get("foreign_key")
+                        and c.get("type", "").upper() == "INTEGER"
+                        and (table["name"], name_col) not in bad_fk_cols):
+                    continue
+                filtered.append(c)
+            table["columns"] = filtered
+
+        # 5. Remove tables left empty
+        data["tables"] = [t for t in tables if t.get("columns")]
+        return yaml.dump(data, default_flow_style=False, sort_keys=False).strip() + "\n"
+
+    # Should not be reached, but satisfy the return type
+    raise RuntimeError("Unexpected error in schema generation")
 
 
 def extract_from_email(

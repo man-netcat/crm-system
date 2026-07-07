@@ -71,3 +71,8 @@ class SchemaDef(BaseModel):
         with open(path) as f:
             data = yaml.safe_load(f)
         return cls.model_validate(data)
+
+    @classmethod
+    def from_yaml_str(cls, text: str) -> "SchemaDef":
+        data = yaml.safe_load(text)
+        return cls.model_validate(data)
