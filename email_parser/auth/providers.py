@@ -9,12 +9,13 @@ class OAuth2Provider:
     imap_server: str
     imap_port: int
     use_ssl: bool
-    device_auth_url: str
+    auth_url: str
     token_url: str
     scopes: list[str]
     client_id: str
     client_secret: str
     tenant: str | None = None
+    device_auth_url: str | None = None
 
 
 # Built-in defaults.
@@ -28,11 +29,12 @@ GOOGLE = OAuth2Provider(
     imap_server="imap.gmail.com",
     imap_port=993,
     use_ssl=True,
-    device_auth_url="https://oauth2.googleapis.com/device/code",
+    auth_url="https://accounts.google.com/o/oauth2/v2/auth",
     token_url="https://oauth2.googleapis.com/token",
     scopes=["https://mail.google.com/"],
     client_id="",
     client_secret="",
+    device_auth_url="https://oauth2.googleapis.com/device/code",
 )
 
 MICROSOFT = OAuth2Provider(
@@ -40,7 +42,7 @@ MICROSOFT = OAuth2Provider(
     imap_server="outlook.office365.com",
     imap_port=993,
     use_ssl=True,
-    device_auth_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode",
+    auth_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",
     token_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
     scopes=[
         "https://outlook.office.com/IMAP.AccessAsUser.All",
@@ -49,6 +51,7 @@ MICROSOFT = OAuth2Provider(
     client_id="",
     client_secret="",
     tenant="common",
+    device_auth_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode",
 )
 
 PROVIDERS: dict[str, OAuth2Provider] = {

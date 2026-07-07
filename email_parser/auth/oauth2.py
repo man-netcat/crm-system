@@ -1,10 +1,13 @@
-import base64
+import http.server
 import json
 import os
+import secrets
+import socket
 import time
-import urllib.request
-import urllib.parse
 import urllib.error
+import urllib.parse
+import urllib.request
+import webbrowser
 from pathlib import Path
 
 from .base import AuthProvider
@@ -33,85 +36,125 @@ def _get_client_config(provider: OAuth2Provider) -> tuple[str, str]:
     cid = os.environ.get(f"EMAIL_PARSER_{env_prefix}_CLIENT_ID") or provider.client_id
     csec = os.environ.get(f"EMAIL_PARSER_{env_prefix}_CLIENT_SECRET") or provider.client_secret
 
-    if not cid and provider.name == "gmail":
+    if not cid:
         print(
-            "No Google OAuth2 client ID configured.\n"
-            "Set these env vars, or create a project at https://console.cloud.google.com/apis/credentials\n"
-            "  EMAIL_PARSER_GMAIL_CLIENT_ID=xxx.apps.googleusercontent.com\n"
-            "  EMAIL_PARSER_GMAIL_CLIENT_SECRET=GOCSPX-xxx\n"
+            f"No OAuth2 client ID configured for '{provider.name}'.\n"
+            f"Set these env vars:\n"
+            f"  EMAIL_PARSER_{env_prefix}_CLIENT_ID=xxx\n"
+            f"  EMAIL_PARSER_{env_prefix}_CLIENT_SECRET=xxx\n"
         )
-    elif not cid:
-        print(f"No OAuth2 client config found for '{provider.name}'.\n"
-              f"Set EMAIL_PARSER_{env_prefix}_CLIENT_ID and EMAIL_PARSER_{env_prefix}_CLIENT_SECRET.")
-
     return cid, csec
 
 
-def _device_code_flow(provider: OAuth2Provider, client_id: str, client_secret: str) -> dict:
-    auth_url = provider.device_auth_url
-    if "{tenant}" in auth_url:
-        auth_url = auth_url.replace("{tenant}", provider.tenant or "common")
+def _resolve_url(url: str, provider: OAuth2Provider) -> str:
+    if "{tenant}" in url:
+        return url.replace("{tenant}", provider.tenant or "common")
+    return url
 
-    data = urllib.parse.urlencode({
+
+def _start_local_server() -> tuple[int, str, str]:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    state = secrets.token_urlsafe(32)
+    code: list[str] = []
+    server_ref: list[http.server.HTTPServer | None] = [None]
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+
+            if "error" in params:
+                self._respond(400, f"Authorization denied: {params['error'][0]}")
+                threading_shutdown()
+                return
+
+            if params.get("state", [None])[0] != state:
+                self._respond(403, "State mismatch — aborting.")
+                threading_shutdown()
+                return
+
+            if "code" in params:
+                code.append(params["code"][0])
+                self._respond(200, "Authorized! You may close this tab.")
+                threading_shutdown()
+                return
+
+            self._respond(400, "No authorization code received.")
+            threading_shutdown()
+
+        def _respond(self, status: int, body: str):
+            self.send_response(status)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def log_message(self, fmt, *args):
+            pass
+
+        def threading_shutdown(self):
+            import threading
+            srv = server_ref[0]
+            if srv:
+                threading.Thread(target=srv.shutdown, daemon=True).start()
+
+    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+    server_ref[0] = server
+    return port, state, code, server
+
+
+def _localhost_redirect_flow(provider: OAuth2Provider, client_id: str, client_secret: str) -> dict:
+    port, state, code, server = _start_local_server()
+    redirect_uri = f"http://127.0.0.1:{port}"
+
+    auth_url = _resolve_url(provider.auth_url, provider)
+    auth_url += "?" + urllib.parse.urlencode({
         "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
         "scope": " ".join(provider.scopes),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    })
+
+    print(f"\n  Opening browser to authorize access...")
+    print(f"  If the browser doesn't open, visit:\n  {auth_url}")
+    webbrowser.open(auth_url)
+
+    server.timeout = 300
+    while not code:
+        try:
+            server.handle_request()
+        except TimeoutError:
+            break
+
+    server.server_close()
+
+    if not code:
+        raise RuntimeError("Authorization timed out — no code received within 5 minutes.")
+
+    token_url = _resolve_url(provider.token_url, provider)
+    data = urllib.parse.urlencode({
+        "code": code[0],
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
     }).encode()
 
-    req = urllib.request.Request(auth_url, data=data, method="POST")
+    req = urllib.request.Request(token_url, data=data, method="POST")
     try:
         resp = urllib.request.urlopen(req)
-        device_info = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         body = e.read().decode()
-        raise RuntimeError(f"Device auth request failed ({e.code}): {body}")
+        raise RuntimeError(f"Token exchange failed ({e.code}): {body}")
 
-    print(f"\n  Visit: {device_info.get('verification_url', device_info.get('verification_uri', ''))}")
-    print(f"  Enter code: {device_info['user_code']}")
-    print(f"\nWaiting for authorization... (check your browser)")
-
-    device_code = device_info["device_code"]
-    interval = device_info.get("interval", 5)
-    expires_in = device_info.get("expires_in", 600)
-
-    token_url = provider.token_url
-    if "{tenant}" in token_url:
-        token_url = token_url.replace("{tenant}", provider.tenant or "common")
-
-    start = time.time()
-    while time.time() - start < expires_in:
-        time.sleep(interval)
-
-        poll_data = urllib.parse.urlencode({
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "device_code": device_code,
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-        }).encode()
-
-        req = urllib.request.Request(token_url, data=poll_data, method="POST")
-        try:
-            resp = urllib.request.urlopen(req)
-            token_info = json.loads(resp.read().decode())
-            print("  Authorized!")
-            return token_info
-        except urllib.error.HTTPError as e:
-            body = json.loads(e.read().decode())
-            error = body.get("error", "")
-            if error == "authorization_pending":
-                continue
-            elif error == "slow_down":
-                interval += 5
-                continue
-            elif error == "expired_token":
-                raise RuntimeError("Device code expired. Restart the authorization flow.")
-            elif error == "access_denied":
-                raise RuntimeError("Authorization denied by user.")
-            elif error == "invalid_client":
-                raise RuntimeError(f"Invalid OAuth2 client credentials for '{provider.name}'.")
-            else:
-                raise RuntimeError(f"Token request failed: {body}")
-
-    raise RuntimeError("Authorization timed out.")
+    print("  Authorized!")
+    return json.loads(resp.read().decode())
 
 
 class OAuth2DeviceAuth(AuthProvider):
@@ -150,7 +193,7 @@ class OAuth2DeviceAuth(AuthProvider):
                 f"EMAIL_PARSER_{self.provider.name.upper()}_CLIENT_SECRET."
             )
 
-        token_info = _device_code_flow(self.provider, cid, csec)
+        token_info = _localhost_redirect_flow(self.provider, cid, csec)
         self._access_token = token_info.get("access_token", "")
         self._refresh_token = token_info.get("refresh_token", "")
         expires_in = token_info.get("expires_in", 3600)
@@ -181,10 +224,7 @@ class OAuth2DeviceAuth(AuthProvider):
         if not cid or not csec:
             raise RuntimeError("Cannot refresh token: no client credentials configured.")
 
-        token_url = self.provider.token_url
-        if "{tenant}" in token_url:
-            token_url = token_url.replace("{tenant}", self.provider.tenant or "common")
-
+        token_url = _resolve_url(self.provider.token_url, self.provider)
         data = urllib.parse.urlencode({
             "client_id": cid,
             "client_secret": csec,
