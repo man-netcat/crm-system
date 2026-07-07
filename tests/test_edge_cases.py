@@ -29,7 +29,7 @@ def _new_db():
     create_database(SCHEMA)
 
 
-def test(name: str, eml_path: str | Path, expect_tables: list[str] | None = None):
+def run_test(name: str, eml_path: str | Path, expect_tables: list[str] | None = None):
     global passed, failed
     print(f"\n=== {name} ===", flush=True)
     _new_db()
@@ -109,31 +109,31 @@ def test(name: str, eml_path: str | Path, expect_tables: list[str] | None = None
 
 if __name__ == "__main__":
     # 1. Empty body
-    test("empty body", EML_DIR / "empty.eml")
+    run_test("empty body", EML_DIR / "empty.eml")
 
     # 2. Irrelevant content
-    test("irrelevant content", EML_DIR / "recipe.eml", expect_tables=[])
+    run_test("irrelevant content", EML_DIR / "recipe.eml", expect_tables=[])
 
     # 3. Multiple records (AI may skip companies, leads should still not crash)
-    test("multiple records", EML_DIR / "multi_lead.eml")
+    run_test("multiple records", EML_DIR / "multi_lead.eml")
 
     # 4. Partial data — company only
-    test("company only", EML_DIR / "company_only.eml",
+    run_test("company only", EML_DIR / "company_only.eml",
          expect_tables=["companies"])
 
     # 5. Unicode / special chars
-    test("unicode", EML_DIR / "unicode.eml",
+    run_test("unicode", EML_DIR / "unicode.eml",
          expect_tables=["companies", "leads"])
 
     # 6. Minimal data
-    test("minimal data", EML_DIR / "minimal.eml",
+    run_test("minimal data", EML_DIR / "minimal.eml",
          expect_tables=["companies"])
 
     # 7. No matching data at all
-    test("no match", EML_DIR / "no_match.eml", expect_tables=[])
+    run_test("no match", EML_DIR / "no_match.eml", expect_tables=[])
 
     # 8. Garbage / binary body
-    test("garbage body", EML_DIR / "garbage.eml", expect_tables=[])
+    run_test("garbage body", EML_DIR / "garbage.eml", expect_tables=[])
 
     # Summary
     print(f"\n{'='*40}")

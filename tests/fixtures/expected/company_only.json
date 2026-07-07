@@ -1,0 +1,26 @@
+{
+  "certainty": 0.9,
+  "spam": 0.01,
+  "extracted": {
+    "companies": [
+      {
+        "company_name": "MegaCorp Industries",
+        "contact_person": "Jane Wilson",
+        "email": "jane@megacorp.com",
+        "phone": "+1-555-222-3333"
+      }
+    ],
+    "leads": [
+      {
+        "company_id": "@last:companies",
+        "contact_name": null,
+        "email": "jane@megacorp.com",
+        "phone": "+1-555-222-3333",
+        "product_interest": "CRM software",
+        "budget": null,
+        "lead_source": null,
+        "notes": "Request for brochure"
+      }
+    ]
+  }
+}

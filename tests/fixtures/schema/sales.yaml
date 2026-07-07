@@ -1,0 +1,53 @@
+database: sales_leads.db
+tables:
+- name: companies
+  description: Company information
+  columns:
+  - name: company_name
+    type: TEXT
+    required: true
+  - name: contact_person
+    type: TEXT
+    required: false
+  - name: email
+    type: TEXT
+    required: false
+  - name: phone
+    type: TEXT
+    required: false
+- name: leads
+  description: Sales leads
+  columns:
+  - name: company_id
+    type: INTEGER
+    foreign_key:
+      table: companies
+      column: id
+    required: true
+  - name: contact_name
+    type: TEXT
+    required: false
+  - name: email
+    type: TEXT
+    required: true
+  - name: phone
+    type: TEXT
+    required: false
+  - name: product_interest
+    type: TEXT
+    required: false
+  - name: budget
+    type: TEXT
+    required: false
+  - name: lead_source
+    type: TEXT
+    required: false
+  - name: notes
+    type: TEXT
+    required: false
+- name: products
+  description: Product information
+  columns:
+  - name: product_name
+    type: TEXT
+    required: true
