@@ -33,14 +33,16 @@ EMAIL CONTENT:
 
 INSTRUCTIONS:
 1. Read the email carefully.
-2. For each table defined in the schema, extract any matching information.
-3. Return ONLY valid JSON with this exact structure:
-{{"table_name": [{{"column_name": value}}, ...]}}
-4. Use null for missing optional fields. Skip tables with no matches.
+2. For each table defined in the schema, extract ONLY matching information.
+3. Return a JSON object with three fields:
+   - "extracted": {{"table_name": [{{"column_name": value}}, ...]}} — the extracted data. Empty object {{}} if no data matches.
+   - "certainty": a float from 0.0 to 1.0 — how confident you are that the extracted data is correct
+   - "spam": a float from 0.0 to 1.0 — how likely this email is irrelevant, spam, or nonsense (0 = genuine sales lead, 1 = total garbage)
+4. Use null for missing optional fields. Skip tables with zero matches.
 5. Extract ALL instances — if multiple records exist, include each as a separate row.
 6. Dates should be in YYYY-MM-DD format where possible.
 7. Do not include any text outside the JSON object.
-8. Every foreign key column listed in FOREIGN KEY RELATIONSHIPS MUST use @last:<tablename> as its value — never null, never a real value. NON-FK columns must never use @last: — extract real data from the email instead."""
+8. Every foreign key column listed in FOREIGN KEY RELATIONSHIPS MUST use @last:<tablename> as its value — never null, never a real value. NON-FK columns must NEVER use @last: — extract real data from the email instead. If you cannot find a value for a non-FK column, use null, not @last:."""
 
 
 SCHEMA_PROMPT = """You are a database schema designer. Given a user's description of what they want to extract from emails, design a relational SQLite schema.
@@ -183,9 +185,20 @@ def extract_from_email(
     content = response["message"]["content"]
 
     try:
-        return json.loads(content)
+        result = json.loads(content)
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", content, re.DOTALL)
         if match:
-            return json.loads(match.group())
-        raise
+            result = json.loads(match.group())
+        else:
+            raise
+
+    if "extracted" in result and "certainty" in result and "spam" in result:
+        return result
+
+    wrapped = {
+        "certainty": 0.5,
+        "spam": 0.5,
+        "extracted": result if isinstance(result, dict) and "extracted" not in result else result.get("extracted", {}),
+    }
+    return wrapped

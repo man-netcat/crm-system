@@ -4,6 +4,7 @@
 import asyncio
 import os
 import re
+import signal
 from pathlib import Path
 
 INBOX_DIR = Path(__file__).parent / "inbox"
@@ -86,6 +87,12 @@ class IMAPSession:
 async def main():
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
 
+    loop = asyncio.get_running_loop()
+    stop = loop.create_future()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: stop.set_result(None))
+
     server = await asyncio.start_server(
         lambda r, w: asyncio.create_task(IMAPSession(r, w).handle()),
         HOST, PORT,
@@ -93,10 +100,14 @@ async def main():
     print(f"Test IMAP server on {HOST}:{PORT}")
     print(f"Inbox dir: {INBOX_DIR}/")
     print(f"Drop .eml files into {INBOX_DIR}/ then run the watch command.")
+    print(f"PID: {os.getpid()}")
     print()
 
     async with server:
-        await server.serve_forever()
+        await stop
+        server.close()
+        await server.wait_closed()
+        print("Server shut down cleanly.")
 
 
 if __name__ == "__main__":

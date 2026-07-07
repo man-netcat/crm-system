@@ -1,0 +1,20 @@
+From: marketing@somecompany.com
+To: sales@ourcompany.com
+Subject: HTML email
+Date: Tue, 07 Jul 2026 17:00:00 -0500
+Content-Type: text/html; charset="utf-8"
+
+<html>
+<body>
+<h1>Interested in Your Product</h1>
+<p>We are evaluating CRM solutions.</p>
+<table>
+<tr><td>Company:</td><td>HTML Corp</td></tr>
+<tr><td>Contact:</td><td>Peter Jones</td></tr>
+<tr><td>Email:</td><td>peter@htmlcorp.com</td></tr>
+<tr><td>Phone:</td><td>+1-555-444-5555</td></tr>
+</table>
+<p>Product Interest: Cloud CRM</p>
+<p>Budget: $45,000</p>
+</body>
+</html>

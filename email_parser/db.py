@@ -87,35 +87,50 @@ def insert_extracted(schema: SchemaDef, extracted: dict[str, list[dict]]) -> dic
         count = 0
         for row in rows:
             values = []
+            has_data = False
             for col_name in col_names:
                 val = row.get(col_name)
                 fk = fk_cols.get(col_name)
                 if isinstance(val, str) and LAST_REF_RE.match(val):
                     if not fk:
-                        raise ValueError(
-                            f"@{val} used on non-FK column \"{table_name}\".\"{col_name}\". "
-                            f"Only FK columns should use @last: references."
+                        print(
+                            f"Warning: @last: reference on non-FK column \"{table_name}\".\"{col_name}\" — treating as null",
+                            flush=True,
                         )
-                    m = LAST_REF_RE.match(val)
-                    ref_table = m.group(1)
-                    resolved = ref_registry.get(ref_table)
-                    if resolved is None:
-                        raise ValueError(
-                            f"@{ref_table} not yet inserted — check dependency order"
-                        )
-                    val = resolved
+                        val = None
+                    else:
+                        m = LAST_REF_RE.match(val)
+                        ref_table = m.group(1)
+                        resolved = ref_registry.get(ref_table)
+                        if resolved is None:
+                            print(
+                                f"Warning: @last:{ref_table} referenced but no rows inserted — treating as null",
+                                flush=True,
+                            )
+                            val = None
+                        else:
+                            val = resolved
+                if val is not None:
+                    col_def = next((c for c in table.columns if c.name == col_name), None)
+                    if col_def and not col_def.foreign_key:
+                        has_data = True
                 values.append(val)
+
+            if not has_data:
+                continue
 
             try:
                 cursor.execute(stmt, values)
                 count += 1
             except sqlite3.IntegrityError as e:
                 vals_display = {col_names[i]: values[i] for i in range(len(col_names))}
-                raise ValueError(
-                    f"Integrity error on table \"{table_name}\": {e}\nRow data: {vals_display}"
-                ) from e
+                print(
+                    f"Warning: Skipping row in \"{table_name}\" — {e}\n  Data: {vals_display}",
+                    flush=True,
+                )
 
-        ref_registry[table_name] = cursor.lastrowid
+        if count:
+            ref_registry[table_name] = cursor.lastrowid
         counts[table_name] = count
 
     conn.commit()

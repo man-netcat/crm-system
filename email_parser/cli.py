@@ -49,7 +49,9 @@ def init(schema_file, prompt, output, model, ollama_host):
 @click.option("--stdin", "-s", "read_stdin", is_flag=True, help="Read email from stdin")
 @click.option("--model", "-m", default="llama3.2", show_default=True, help="Ollama model name")
 @click.option("--ollama-host", default="http://localhost:11434", show_default=True, help="Ollama server URL")
-def parse(schema_file, text, filepath, read_stdin, model, ollama_host):
+@click.option("--min-certainty", default=0.0, type=float, show_default=True, help="Minimum certainty score (0-1) to accept extraction")
+@click.option("--max-spam", default=1.0, type=float, show_default=True, help="Maximum spam score (0-1) to accept extraction")
+def parse(schema_file, text, filepath, read_stdin, model, ollama_host, min_certainty, max_spam):
     """Extract data from an email and store it in the database."""
     schema = SchemaDef.from_yaml(schema_file)
 
@@ -69,10 +71,22 @@ def parse(schema_file, text, filepath, read_stdin, model, ollama_host):
 
     click.echo(f"Extracting data using {model} ...")
     try:
-        extracted = extract_from_email(schema, content, model=model, ollama_host=ollama_host)
+        result = extract_from_email(schema, content, model=model, ollama_host=ollama_host)
     except Exception as e:
         click.echo(f"Extraction failed: {e}", err=True)
         sys.exit(1)
+
+    extracted = result["extracted"]
+    certainty = result["certainty"]
+    spam = result["spam"]
+    click.echo(f"  certainty: {certainty:.2f}, spam: {spam:.2f}")
+
+    if certainty < min_certainty:
+        click.echo(f"  Skipped: certainty {certainty:.2f} below minimum {min_certainty}", err=True)
+        sys.exit(0)
+    if spam > max_spam:
+        click.echo(f"  Skipped: spam {spam:.2f} exceeds maximum {max_spam}", err=True)
+        sys.exit(0)
 
     counts = insert_extracted(schema, extracted)
     total_rows = sum(counts.values())
@@ -94,7 +108,9 @@ def parse(schema_file, text, filepath, read_stdin, model, ollama_host):
 @click.option("--interval", default=60, type=int, show_default=True, help="Poll interval in seconds")
 @click.option("--model", "-m", default="llama3.2", show_default=True, help="Ollama model name")
 @click.option("--ollama-host", default="http://localhost:11434", show_default=True, help="Ollama server URL")
-def watch(schema_file, server, user, password, port, use_ssl, folder, interval, model, ollama_host):
+@click.option("--min-certainty", default=0.0, type=float, show_default=True, help="Minimum certainty score (0-1)")
+@click.option("--max-spam", default=1.0, type=float, show_default=True, help="Maximum spam score (0-1)")
+def watch(schema_file, server, user, password, port, use_ssl, folder, interval, model, ollama_host, min_certainty, max_spam):
     """Watch an IMAP inbox and extract data from incoming emails."""
     schema = SchemaDef.from_yaml(schema_file)
     password = password or os.environ.get("IMAP_PASSWORD")
@@ -108,7 +124,17 @@ def watch(schema_file, server, user, password, port, use_ssl, folder, interval, 
             return
         click.echo(f"\nNew email: {email_data.get('subject', '(no subject)')}")
         try:
-            extracted = extract_from_email(schema, body, model=model, ollama_host=ollama_host)
+            result = extract_from_email(schema, body, model=model, ollama_host=ollama_host)
+            certainty = result["certainty"]
+            spam = result["spam"]
+            extracted = result["extracted"]
+            click.echo(f"  certainty: {certainty:.2f}, spam: {spam:.2f}")
+            if certainty < min_certainty:
+                click.echo(f"  Skipped (certainty {certainty:.2f} < {min_certainty})")
+                return
+            if spam > max_spam:
+                click.echo(f"  Skipped (spam {spam:.2f} > {max_spam})")
+                return
             counts = insert_extracted(schema, extracted)
             for table_name, count in counts.items():
                 if count:

@@ -23,15 +23,22 @@ def from_stdin() -> str:
 
 
 def _get_body(msg: email.message.Message) -> str:
+    def _decode(payload: bytes | str) -> str:
+        if isinstance(payload, bytes):
+            return payload.decode("utf-8", errors="replace")
+        return payload
+
     if msg.is_multipart():
         for part in msg.walk():
             if part.get_content_type() == "text/plain":
-                payload = part.get_content()
-                if payload:
-                    return payload
+                raw = part.get_payload(decode=True)
+                if raw:
+                    return _decode(raw)
         return ""
-    payload = msg.get_content()
-    return payload or ""
+    raw = msg.get_payload(decode=True)
+    if raw:
+        return _decode(raw)
+    return ""
 
 
 def fetch_imap_emails(
