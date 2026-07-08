@@ -102,7 +102,7 @@ def test_insert_extracted_basic():
 
 
 def test_insert_extracted_multiple_companies():
-    """Multiple ref rows → auto-fill doesn't trigger, contacts with null FK are skipped."""
+    """Multiple ref rows with matching counts → auto-fill fills @pos: references."""
     schema = _schema()
     path = _write_db(schema)
     try:
@@ -119,7 +119,11 @@ def test_insert_extracted_multiple_companies():
         _auto_fill_fks(schema, extracted)
         counts = insert_extracted(schema.model_copy(update={"database": path}), extracted)
         assert counts["companies"] == 2
-        assert counts["contacts"] == 0  # null FK → NOT NULL → skip
+        assert counts["contacts"] == 2  # @pos:companies:1 and @pos:companies:2
+        conn = sqlite3.connect(path)
+        rows = conn.execute("SELECT email, company_id FROM contacts ORDER BY email").fetchall()
+        assert rows == [("alice@alpha.com", 1), ("bob@beta.com", 2)]
+        conn.close()
     finally:
         os.remove(path)
 

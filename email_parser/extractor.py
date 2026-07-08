@@ -2,6 +2,7 @@ import json
 import re
 
 from .schema import SchemaDef
+from .prompt_logger import log
 
 
 def _build_relationship_guide(schema: SchemaDef) -> str:
@@ -14,106 +15,76 @@ def _build_relationship_guide(schema: SchemaDef) -> str:
             ref = c.foreign_key
             lines.append(
                 f'  - "{table.name}"."{c.name}" → "{ref.table}"."{ref.column}"  '
-                f'→ use @last:{ref.table}'
+                f'→ @last:{ref.table} or @pos:{ref.table}:<N>'
             )
     if not lines:
         return ""
-    return "FOREIGN KEY RELATIONSHIPS:\n" + "\n".join(lines)
+    return "FOREIGN KEYS:\n" + "\n".join(lines)
 
 
-EXTRACTION_PROMPT = """You are an email data extraction engine. Extract structured data from emails based on the provided database schema.
+EXTRACTION_PROMPT = """Extract data from the email into the schema below.
 
-DATABASE SCHEMA:
-{schema_json}
+SCHEMA:
+{schema_text}
 
 {relationship_guide}
 
-EMAIL CONTENT:
+EMAIL:
 {email_content}
 
-INSTRUCTIONS:
-1. Read the email carefully.
-2. For each table defined in the schema, extract ONLY matching information.
-3. Return a JSON object with three fields:
-   - "extracted": {{"table_name": [{{"column_name": value}}, ...]}} — the extracted data. Empty object {{}} if no data matches.
-   - "certainty": a float from 0.0 to 1.0 — how confident you are that the extracted data is correct
-   - "spam": a float from 0.0 to 1.0 — how likely this email is irrelevant, spam, or nonsense (0 = genuine sales lead, 1 = total garbage)
-4. Use null for missing optional fields. Skip tables with zero matches.
-5. Extract ALL instances — if multiple records exist, include each as a separate row.
-6. Dates should be in YYYY-MM-DD format where possible.
-7. Do not include any text outside the JSON object.
-8. Every foreign key column listed in FOREIGN KEY RELATIONSHIPS MUST use @last:<tablename> as its value — never null, never a real value. NON-FK columns must NEVER use @last: — extract real data from the email instead. If you cannot find a value for a non-FK column, use null, not @last:."""
+RULES:
+1. Return JSON: {{"extracted": {{"table": [{{"col": value}}]}}, "certainty": 0-1, "spam": 0-1}}
+2. FK columns → use @last:<table> (all rows share parent) or @pos:<table>:<N> (specific row, 1-based). NEVER use real IDs or null for FKs.
+3. Non-FK columns → extract real values from email. NEVER use @last: or @pos:. Use null only if missing.
+4. PK columns (<table>_id) → extract value from email if present (e.g. "Order ID: 5002" → order_id: 5002). Use null if absent.
+5. Output EVERY table from the schema as a key in "extracted". Include every entity mentioned — even if some optional fields are missing, include them as null. If no matching data for a table, use an empty array [].
+6. Output ONLY valid JSON — no other text."""
 
 
-SCHEMA_PROMPT = """You are a database schema designer. Given a user's description of what they want to extract from emails, design a relational SQLite schema.
+SCHEMA_PROMPT = """Design a relational SQLite schema for extracting data from emails.
 
-User's requirements: "{prompt}"
+Requirements: "{prompt}"
 
-Generate a YAML schema in this EXACT format (this is a valid example, follow the structure):
-
-database: emails.db
+Output YAML in this structure (replace the example content):
+database: mydata.db
 tables:
-  - name: projects
-    description: "Projects"
+  - name: entity_one
+    description: "..."
     columns:
-      - name: project_name
-        type: TEXT
-        description: "Project name"
-        required: true
-      - name: lead_name
-        type: TEXT
-        description: "Project lead"
-        required: false
-  - name: milestones
-    description: "Milestones within a project"
-    columns:
-      - name: project_id
+      - name: entity_one_id
         type: INTEGER
-        description: "FK to projects.id"
-        foreign_key:
-          table: projects
-          column: id
         required: true
-      - name: milestone_name
+        description: "PK — auto-generated"
+      - name: some_field
         type: TEXT
-        description: "Milestone name"
-        required: true
-      - name: due_date
-        type: DATE
-        description: "Due date"
         required: false
-  - name: tasks
-    description: "Individual tasks"
+        description: "..."
+  - name: entity_two
+    description: "..."
     columns:
-      - name: milestone_id
+      - name: entity_two_id
         type: INTEGER
-        description: "FK to milestones"
+        required: true
+        description: "PK — auto-generated"
+      - name: entity_one_id
+        type: INTEGER
         foreign_key:
-          table: milestones
-          column: id
+          table: entity_one
+          column: entity_one_id
         required: true
-      - name: task_name
+        description: "FK to entity_one"
+      - name: another_field
         type: TEXT
-        description: "Task name"
-        required: true
-      - name: assignee
-        type: TEXT
-        description: "Assigned person"
         required: false
+        description: "..."
 
-Rules:
-- 2 to 3 tables max — each table must be a distinct real-world entity (e.g. customers, orders, products)
-- Each table gets auto-generated id (do NOT include it in columns)
-- Every foreign_key must reference another table's id column:
-    foreign_key:
-      table: <table_name>
-      column: id
-  column: id is MANDATORY — never reference name, email, or any non-id column
-- Foreign key column names should end with _id (e.g. project_id, client_id)
-- Only create tables that the user explicitly mentions in their requirements
-- NEVER create join/lookup tables, relationship tables, status-history tables, or extra tables that are not explicitly described
-- Follow the YAML structure above exactly — including the nesting and quoting style
-- Output ONLY valid YAML — no markdown fences, no explanations"""
+RULES:
+- Cover the main entities the user describes. Keep it focused — aim for 2-5 tables.
+- PK: each table needs `<table>_id` as first column. TEXT for alphanumeric IDs, INTEGER for numeric IDs.
+- FK: column name ends with `_id`. Reference `<table>_id` only — never `id`.
+- Required: only PK and FK columns. All other columns: `required: false`.
+- Column placement: each column in its most natural table. No duplicated data across tables.
+- Output: valid YAML only, no markdown fences, no explanations."""
 
 
 def generate_schema_from_prompt(
@@ -128,8 +99,9 @@ def generate_schema_from_prompt(
     client = ollama.Client(host=ollama_host)
 
     system_msg = (
-        "You are a database designer. Output only valid YAML, no explanations. "
-        "Every foreign_key MUST reference column: id — never use any other column."
+        "You are a database designer. Output only valid YAML. "
+        "Every foreign_key column MUST reference <table>_id — never 'id'. "
+        "Only PK and FK columns should have required: true."
     )
 
     for attempt in range(1 + max_retries):
@@ -145,11 +117,12 @@ def generate_schema_from_prompt(
                     "content": SCHEMA_PROMPT.format(prompt=prompt),
                 },
             ],
-            options={"temperature": 0.1},
+            options={"temperature": 0.1, "num_predict": 4096},
         )
         content = response["message"]["content"]
 
-        # Strip markdown fences
+        # Strip markdown fences and YAML document separators
+        content = re.sub(r'^---\s*\n?', '', content, count=1)
         content = re.sub(r'^```(?:yaml|yml)?\s*\n?', '', content, count=1)
         content = re.sub(r'\n?```\s*$', '', content, count=1)
 
@@ -188,36 +161,59 @@ def generate_schema_from_prompt(
             seen_names.add(name)
             tables.append(table)
 
-        # 2. Fix FKs: force column=id, strip references to non-existent tables
+        # 2. Fix FKs: strip self-referencing FKs and references to non-existent tables, fix column refs
         table_names = {t["name"] for t in tables}
-        bad_fk_cols = set()
+        table_cols = {t["name"]: {c["name"] for c in t.get("columns", [])} for t in tables}
         for table in tables:
             for col in table.get("columns", []):
                 fk = col.get("foreign_key")
                 if fk:
-                    fk["column"] = "id"
-                    if fk.get("table") not in table_names:
+                    if fk.get("table") == table["name"]:
+                        # Self-referencing FK — always wrong
                         del col["foreign_key"]
-                        bad_fk_cols.add((table["name"], col["name"]))
+                    elif fk.get("table") not in table_names:
+                        del col["foreign_key"]
+                    elif fk.get("column") not in table_cols.get(fk["table"], set()):
+                        # FK references a non-existent column — find the actual PK
+                        target_table = next(t for t in tables if t["name"] == fk["table"])
+                        pk_cols = [c["name"] for c in target_table.get("columns", [])
+                                   if c["name"].endswith("_id")]
+                        if pk_cols:
+                            fk["column"] = pk_cols[0]
+                        else:
+                            del col["foreign_key"]
 
-        # 4. Filter columns (remove id, auto-ID heuristic)
+        # 3. Filter columns — remove bare "id" (conflicts with auto PK), keep everything else
         for table in tables:
             filtered = []
             for c in table.get("columns", []):
                 name_col = c.get("name", "")
                 if not name_col or name_col == "id":
                     continue
-                # INTEGER *_id without FK and not a stripped-bad-FK column → auto-ID
-                if (name_col.endswith("_id") and not c.get("foreign_key")
-                        and c.get("type", "").upper() == "INTEGER"
-                        and (table["name"], name_col) not in bad_fk_cols):
-                    continue
                 filtered.append(c)
             table["columns"] = filtered
 
+        # 4. Only PK and FK columns keep required: true — all data columns become optional
+        for table in tables:
+            pk_col_name = None
+            for c in table.get("columns", []):
+                cname = c.get("name", "")
+                if cname.endswith("_id") and c.get("type", "").upper() == "INTEGER" and not c.get("foreign_key"):
+                    pk_col_name = cname
+                    break
+            for c in table.get("columns", []):
+                cname = c.get("name", "")
+                is_pk = (cname == pk_col_name)
+                has_fk = bool(c.get("foreign_key"))
+                is_self_fk = has_fk and c["foreign_key"].get("table") == table["name"]
+                if not is_pk and (not has_fk or is_self_fk):
+                    c["required"] = False
+
         # 5. Remove tables left empty
         data["tables"] = [t for t in tables if t.get("columns")]
-        return yaml.dump(data, default_flow_style=False, sort_keys=False).strip() + "\n"
+        final = yaml.dump(data, default_flow_style=False, sort_keys=False).strip() + "\n"
+        log("schema_generation", prompt, final)
+        return final
 
     # Should not be reached, but satisfy the return type
     raise RuntimeError("Unexpected error in schema generation")
@@ -232,7 +228,20 @@ def extract_from_email(
     import ollama
 
     client = ollama.Client(host=ollama_host)
-    schema_json = schema.model_dump_json(indent=2, exclude={"database"})
+    # Build a clean text schema representation (not JSON — avoids "name" key confusion)
+    schema_lines = []
+    for t in schema.tables:
+        pk_name = f"{t.name}_id"
+        cols = []
+        for c in t.columns:
+            frag = c.name
+            if c.name == pk_name:
+                frag += " (PK)"
+            if c.foreign_key:
+                frag += f" (FK→{c.foreign_key.table})"
+            cols.append(frag)
+        schema_lines.append(f"  {t.name}: {', '.join(cols)}")
+    schema_text = "Tables:\n" + "\n".join(schema_lines)
     relationship_guide = _build_relationship_guide(schema)
 
     response = client.chat(
@@ -240,12 +249,12 @@ def extract_from_email(
         messages=[
             {
                 "role": "system",
-                "content": "You are a precise data extraction engine. Always return valid JSON matching the requested schema.",
+                "content": "You are a precise data extraction engine. Return valid JSON only. FK columns use @last: or @pos:. Non-FK columns use real values.",
             },
             {
                 "role": "user",
                 "content": EXTRACTION_PROMPT.format(
-                    schema_json=schema_json,
+                    schema_text=schema_text,
                     relationship_guide=relationship_guide,
                     email_content=email_content,
                 ),
@@ -256,6 +265,8 @@ def extract_from_email(
     )
 
     content = response["message"]["content"]
+
+    log("extraction", email_content[:500], content[:500])
 
     try:
         result = json.loads(content)

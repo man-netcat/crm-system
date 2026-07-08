@@ -43,7 +43,7 @@ def test_build_relationship_guide():
     assert 'orders"."contact_id"' in guide
     assert '"contacts"."id"' in guide
     assert '@last:contacts' in guide
-    assert "FOREIGN KEY RELATIONSHIPS:" in guide
+    assert "FOREIGN KEYS:" in guide
 
 
 def test_build_relationship_guide_no_fks():
@@ -54,18 +54,33 @@ def test_build_relationship_guide_no_fks():
     assert _build_relationship_guide(s) == ""
 
 
+def _schema_text(s):
+    lines = []
+    for t in s.tables:
+        cols = []
+        for c in t.columns:
+            frag = c.name
+            if c.name == f"{t.name}_id":
+                frag += " (PK)"
+            if c.foreign_key:
+                frag += f" (FK->{c.foreign_key.table})"
+            cols.append(frag)
+        lines.append(f"  {t.name}: {', '.join(cols)}")
+    return "Tables:\n" + "\n".join(lines)
+
+
 def test_extraction_prompt_contains_sections():
     s = _schema()
     guide = _build_relationship_guide(s)
     prompt = EXTRACTION_PROMPT.format(
-        schema_json=s.model_dump_json(indent=2),
+        schema_text=_schema_text(s),
         relationship_guide=guide,
         email_content="Test email body",
     )
-    assert "DATABASE SCHEMA:" in prompt
-    assert "FOREIGN KEY RELATIONSHIPS:" in prompt
-    assert "EMAIL CONTENT:" in prompt
-    assert "INSTRUCTIONS:" in prompt
+    assert "SCHEMA:" in prompt
+    assert "FOREIGN KEYS:" in prompt
+    assert "EMAIL:" in prompt
+    assert "RULES:" in prompt
     assert "certainty" in prompt
     assert "spam" in prompt
     assert "extracted" in prompt
@@ -75,7 +90,7 @@ def test_extraction_prompt_contains_sections():
 def test_extraction_prompt_requires_json_structure():
     """Verify the prompt instructs the AI to return the correct JSON shape."""
     prompt = EXTRACTION_PROMPT.format(
-        schema_json="{}",
+        schema_text="test",
         relationship_guide="",
         email_content="test",
     )
@@ -90,7 +105,7 @@ def test_extraction_prompt_fk_instruction():
     s = _schema()
     guide = _build_relationship_guide(s)
     prompt = EXTRACTION_PROMPT.format(
-        schema_json=s.model_dump_json(indent=2),
+        schema_text=_schema_text(s),
         relationship_guide=guide,
         email_content="test",
     )
@@ -101,8 +116,8 @@ def test_extraction_prompt_fk_instruction():
 def test_extraction_prompt_no_hallucination():
     """Prompt should tell AI to skip irrelevant content."""
     prompt = EXTRACTION_PROMPT.format(
-        schema_json="{}",
+        schema_text="test",
         relationship_guide="",
         email_content="recipe content",
     )
-    assert "irrelevant" in prompt.lower() or "nothing to do" in prompt.lower()
+    assert "matching records" in prompt.lower() or "only if missing" in prompt.lower()
