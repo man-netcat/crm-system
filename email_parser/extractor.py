@@ -89,7 +89,7 @@ RULES:
 
 def generate_schema_from_prompt(
     prompt: str,
-    model: str = "llama3.1:8b",
+    model: str = "qwen2.5:7b",
     ollama_host: str = "http://localhost:11434",
     max_retries: int = 2,
 ) -> str:
@@ -258,7 +258,7 @@ def generate_schema_from_prompt(
 def extract_from_email(
     schema,
     email_content: str,
-    model: str = "llama3.1:8b",
+    model: str = "qwen2.5:7b",
     ollama_host: str = "http://localhost:11434",
 ) -> dict:
     import ollama
