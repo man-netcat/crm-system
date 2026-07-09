@@ -250,6 +250,20 @@ def generate_schema_from_prompt(
                 if cname.endswith("_id") and not c.get("foreign_key"):
                     c["required"] = False
 
+        # 5b. Fix FK references: if step 5 added a new PK, update any FK that references
+        # a non-PK *_id column in that table to point to the actual PK.
+        pk_map = {t["name"]: f"{t['name']}_id" for t in tables}
+        for table in tables:
+            for col in table.get("columns", []):
+                fk = col.get("foreign_key")
+                if fk:
+                    expected_pk = pk_map.get(fk["table"])
+                    if expected_pk and fk["column"] != expected_pk:
+                        # Only update if the FK's target column exists in the referenced table
+                        ref_table = next((t for t in tables if t["name"] == fk["table"]), None)
+                        if ref_table and fk["column"] in {c["name"] for c in ref_table.get("columns", [])}:
+                            fk["column"] = expected_pk
+
         # 6. Remove tables left empty
         data["tables"] = [t for t in tables if t.get("columns")]
         final = yaml.dump(data, default_flow_style=False, sort_keys=False).strip() + "\n"
