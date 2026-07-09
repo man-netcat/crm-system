@@ -48,35 +48,35 @@ Requirements: "{prompt}"
 Output YAML in this structure (replace the example content):
 database: mydata.db
 tables:
-  - name: entity_one
-    description: "..."
+  - name: customers
+    description: "Customer information"
     columns:
-      - name: entity_one_id
+      - name: customers_id
         type: INTEGER
         required: true
         description: "PK — auto-generated"
-      - name: some_field
+      - name: company_name
         type: TEXT
         required: false
-        description: "..."
-  - name: entity_two
-    description: "..."
+        description: "Company name"
+  - name: orders
+    description: "Customer orders"
     columns:
-      - name: entity_two_id
+      - name: orders_id
         type: INTEGER
         required: true
         description: "PK — auto-generated"
-      - name: entity_one_id
+      - name: customer_id
         type: INTEGER
         foreign_key:
-          table: entity_one
-          column: entity_one_id
+          table: customers
+          column: customers_id
         required: true
-        description: "FK to entity_one"
-      - name: another_field
+        description: "FK to customers"
+      - name: order_date
         type: TEXT
         required: false
-        description: "..."
+        description: "Order date"
 
 RULES:
 - Cover the main entities the user describes. Keep it focused — aim for 2-5 tables.
@@ -89,7 +89,7 @@ RULES:
 
 def generate_schema_from_prompt(
     prompt: str,
-    model: str = "llama3.2",
+    model: str = "llama3.1:8b",
     ollama_host: str = "http://localhost:11434",
     max_retries: int = 2,
 ) -> str:
@@ -161,6 +161,12 @@ def generate_schema_from_prompt(
             seen_names.add(name)
             tables.append(table)
 
+        # 1b. Hard limit: keep ≤5 tables (the most detailed ones)
+        if len(tables) > 5:
+            tables.sort(key=lambda t: len(t.get("columns", [])), reverse=True)
+            tables = tables[:5]
+            data["tables"] = tables
+
         # 2. Fix FKs: strip self-referencing FKs and references to non-existent tables, fix column refs
         table_names = {t["name"] for t in tables}
         table_cols = {t["name"]: {c["name"] for c in t.get("columns", [])} for t in tables}
@@ -182,6 +188,13 @@ def generate_schema_from_prompt(
                             fk["column"] = pk_cols[0]
                         else:
                             del col["foreign_key"]
+
+        # 2b. Normalize FK column names: ensure they end with _id
+        for table in tables:
+            for col in table.get("columns", []):
+                fk = col.get("foreign_key")
+                if fk and not col["name"].endswith("_id"):
+                    col["name"] = f"{fk['table']}_id"
 
         # 3. Filter columns — remove bare "id" (conflicts with auto PK), keep everything else
         for table in tables:
@@ -209,7 +222,30 @@ def generate_schema_from_prompt(
                 if not is_pk and (not has_fk or is_self_fk):
                     c["required"] = False
 
-        # 5. Remove tables left empty
+        # 5. Schema self-consistency check: ensure every table has a PK, no duplicate columns
+        for table in tables:
+            cols = table.setdefault("columns", [])
+            col_names = [c["name"] for c in cols]
+            # Deduplicate columns (keep first occurrence)
+            seen = set()
+            deduped = []
+            for c in cols:
+                if c["name"] not in seen:
+                    seen.add(c["name"])
+                    deduped.append(c)
+            if len(deduped) != len(cols):
+                table["columns"] = deduped
+            # Ensure PK column exists
+            pk_col_name = f"{table['name']}_id"
+            if pk_col_name not in seen:
+                cols.insert(0, {
+                    "name": pk_col_name,
+                    "type": "INTEGER",
+                    "required": True,
+                    "description": "PK — auto-generated",
+                })
+
+        # 6. Remove tables left empty
         data["tables"] = [t for t in tables if t.get("columns")]
         final = yaml.dump(data, default_flow_style=False, sort_keys=False).strip() + "\n"
         log("schema_generation", prompt, final)
@@ -220,9 +256,9 @@ def generate_schema_from_prompt(
 
 
 def extract_from_email(
-    schema: SchemaDef,
+    schema,
     email_content: str,
-    model: str = "llama3.2",
+    model: str = "llama3.1:8b",
     ollama_host: str = "http://localhost:11434",
 ) -> dict:
     import ollama
@@ -278,11 +314,79 @@ def extract_from_email(
             raise
 
     if "extracted" in result and "certainty" in result and "spam" in result:
-        return result
+        extracted = result["extracted"]
+    else:
+        extracted = result if isinstance(result, dict) and "extracted" not in result else result.get("extracted", {})
+
+    # Validate extraction: check FK columns have @last:/@pos: markers
+    if not _validate_extraction(schema, extracted):
+        # Retry once with slightly higher temperature for diversity
+        log("extraction_retry", "Retrying extraction due to validation failure", "")
+        retry_resp = client.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a precise data extraction engine. Return valid JSON only. FK columns use @last: or @pos:. Non-FK columns use real values."},
+                {"role": "user", "content": EXTRACTION_PROMPT.format(
+                    schema_text=schema_text,
+                    relationship_guide=relationship_guide,
+                    email_content=email_content,
+                )},
+            ],
+            options={"temperature": 0.3},  # slightly higher for variation
+            format="json",
+        )
+        retry_content = retry_resp["message"]["content"]
+        log("extraction_retry_result", email_content[:200], retry_content[:500])
+        try:
+            retry_result = json.loads(retry_content)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", retry_content, re.DOTALL)
+            if match:
+                retry_result = json.loads(match.group())
+            else:
+                retry_result = result  # fall back to original
+        if "extracted" in retry_result and "certainty" in retry_result and "spam" in retry_result:
+            extracted = retry_result["extracted"]
+        else:
+            extracted = retry_result if isinstance(retry_result, dict) and "extracted" not in retry_result else retry_result.get("extracted", {})
 
     wrapped = {
-        "certainty": 0.5,
-        "spam": 0.5,
-        "extracted": result if isinstance(result, dict) and "extracted" not in result else result.get("extracted", {}),
+        "certainty": result.get("certainty", 0.5),
+        "spam": result.get("spam", 0.5),
+        "extracted": extracted,
     }
     return wrapped
+
+
+def _validate_extraction(schema, extracted: dict) -> bool:
+    """Check that the extraction result is consistent with the schema.
+    Returns True if valid, False if retry is likely to help."""
+    if not extracted or not isinstance(extracted, dict):
+        return False
+
+    schema_table_names = {t.name for t in schema.tables}
+    for table_name, rows in extracted.items():
+        if table_name not in schema_table_names:
+            return False  # unknown table — schema may have changed
+        if not isinstance(rows, list):
+            return False
+        table = next(t for t in schema.tables if t.name == table_name)
+        schema_col_names = {c.name for c in table.columns}
+        fk_col_names = {c.name for c in table.columns if c.foreign_key}
+        for row in rows:
+            if not isinstance(row, dict):
+                return False
+            # Check for unknown columns
+            for key in row:
+                if key not in schema_col_names:
+                    return False
+            # Check FK columns have @last: or @pos: markers
+            for fk_name in fk_col_names:
+                val = row.get(fk_name)
+                if val is not None and not isinstance(val, str):
+                    continue  # already resolved (edge case)
+                if val is None:
+                    continue  # _auto_fill_fks will handle null FKs
+                if isinstance(val, str) and not val.startswith("@last:") and not val.startswith("@pos:"):
+                    return False  # FK has a raw value — likely wrong
+    return True
