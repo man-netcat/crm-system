@@ -217,9 +217,7 @@ def generate_schema_from_prompt(
             for c in table.get("columns", []):
                 cname = c.get("name", "")
                 is_pk = (cname == pk_col_name)
-                has_fk = bool(c.get("foreign_key"))
-                is_self_fk = has_fk and c["foreign_key"].get("table") == table["name"]
-                if not is_pk and (not has_fk or is_self_fk):
+                if not is_pk:
                     c["required"] = False
 
         # 5. Schema self-consistency check: ensure every table has a PK, no duplicate columns
@@ -244,6 +242,13 @@ def generate_schema_from_prompt(
                     "required": True,
                     "description": "PK — auto-generated",
                 })
+            # After ensuring PK, mark all other *_id columns (that aren't FKs) as optional
+            for c in table.get("columns", []):
+                cname = c.get("name", "")
+                if cname == pk_col_name:
+                    continue
+                if cname.endswith("_id") and not c.get("foreign_key"):
+                    c["required"] = False
 
         # 6. Remove tables left empty
         data["tables"] = [t for t in tables if t.get("columns")]

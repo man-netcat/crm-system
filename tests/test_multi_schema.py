@@ -15,7 +15,7 @@ from email_parser.schema import SchemaDef
 from email_parser.db import create_database, insert_extracted
 from email_parser.extractor import generate_schema_from_prompt, extract_from_email
 
-MODEL = "llama3.1:8b"
+MODEL = "qwen2.5:7b"
 
 DOMAINS = [
     {
