@@ -1,0 +1,27 @@
+{% extends "layout.html" %}
+{% block title %}New Schema — email-parser{% endblock %}
+{% block content %}
+<h1>New Schema</h1>
+<div class="card">
+  <form method="POST" action="{{ url_for('schema_create') }}">
+    <label for="prompt">Describe the data you want to extract from emails</label>
+    <textarea name="prompt" id="prompt" placeholder="e.g. Track customer support tickets: each ticket has a customer name, issue description, priority (high/medium/low), status (open/in progress/resolved), and an assigned agent name."></textarea>
+    <div class="meta" style="margin-top: .25rem;">The AI will infer a relational schema from this description.</div>
+    <div style="margin-top: 1rem;">
+      <button type="submit" class="btn btn-primary">Generate Schema</button>
+      <a href="{{ url_for('index') }}" class="btn btn-outline" style="margin-left: .5rem;">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Example prompts</h2>
+  <ul style="margin-top: .5rem; line-height: 1.8;">
+    <li><em>Track customer support tickets</em> — customer name, issue, priority, status, agent</li>
+    <li><em>Extract job applications</em> — applicant name, email, phone, position, department</li>
+    <li><em>Track purchase orders</em> — supplier, PO number, items, quantities, prices</li>
+    <li><em>Extract real estate leads</em> — prospect name, property type, budget, neighborhood</li>
+    <li><em>Track restaurant reservations</em> — guest name, party size, date/time, special requests</li>
+  </ul>
+</div>
+{% endblock %}

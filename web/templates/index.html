@@ -1,0 +1,34 @@
+{% extends "layout.html" %}
+{% block title %}Schemas — email-parser{% endblock %}
+{% block content %}
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+    <h1>Schemas</h1>
+    <a href="{{ url_for('schema_new') }}" class="btn btn-primary">+ New Schema</a>
+  </div>
+
+  {% if not schemas %}
+    <div class="card">
+      <p class="empty">No schemas yet. <a href="{{ url_for('schema_new') }}">Create your first one</a>.</p>
+    </div>
+  {% endif %}
+
+  {% for s in schemas %}
+    <div class="card" style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <h2><a href="{{ url_for('schema_detail', path=s.path) }}" style="color: inherit; text-decoration: none;">{{ s.name }}</a></h2>
+        <div class="meta">
+          {{ s.tables|length }} table(s)
+          &middot; {{ s.row_count }} row(s)
+          &middot; <span class="badge">{{ s.path }}</span>
+        </div>
+      </div>
+      <div class="actions">
+        <a href="{{ url_for('import_email', path=s.path) }}" class="btn btn-outline btn-sm">Import Email</a>
+        <a href="{{ url_for('schema_detail', path=s.path) }}" class="btn btn-outline btn-sm">View</a>
+        <form method="POST" action="{{ url_for('schema_delete', path=s.path) }}" style="display:inline" onsubmit="return confirm('Delete this schema and all its data?')">
+          <button type="submit" class="btn btn-outline btn-sm" style="color:#dc3545; border-color:#dc3545;">Delete</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+{% endblock %}

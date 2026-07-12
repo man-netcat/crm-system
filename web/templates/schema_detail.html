@@ -1,0 +1,42 @@
+{% extends "layout.html" %}
+{% block title %}{{ schema_path|slug }} — email-parser{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
+  <div>
+    <h1>{{ schema_path|slug }}</h1>
+    <div class="meta">{{ schema.tables|length }} table(s) &middot; {{ schema_path }}</div>
+  </div>
+  <div class="actions">
+    <a href="{{ url_for('import_email', path=schema_path) }}" class="btn btn-primary">Import Email</a>
+    <form method="POST" action="{{ url_for('schema_delete', path=schema_path) }}" style="display:inline" onsubmit="return confirm('Delete this schema and all its data?')">
+      <button type="submit" class="btn btn-outline btn-sm" style="color:#dc3545; border-color:#dc3545;">Delete</button>
+    </form>
+  </div>
+</div>
+
+{% for t in tables %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+    <h2>{{ t.name }}</h2>
+    <span class="badge">{{ t.row_count }} row(s)</span>
+  </div>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        {% for col in t.columns %}
+          <th>{{ col }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody hx-get="{{ url_for('table_data', path=schema_path, table_name=t.name) }}" hx-trigger="load" hx-swap="innerHTML">
+      <tr><td colspan="{{ t.columns|length }}" class="meta">Loading...</td></tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endfor %}
+
+<a href="{{ url_for('index') }}">&larr; Back to schemas</a>
+{% endblock %}

@@ -8,3 +8,10 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# Generated artifacts
+prompts.log
+*.eml
+/mydata.yaml
+/orders.yaml
+/inferred_schema.yaml

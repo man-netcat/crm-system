@@ -1,0 +1,87 @@
+{% extends "layout.html" %}
+{% block title %}Import Email — {{ schema_path|slug }}{% endblock %}
+{% block content %}
+<h1>Import Email</h1>
+<div class="card">
+  <p class="meta">Schema: <strong>{{ schema_path }}</strong> &middot; {{ schema.tables|length }} table(s)</p>
+  <div style="display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem;">
+    {% for t in tables %}
+    <div style="background: #f0f0f5; border-radius: 6px; padding: .5rem .75rem; font-size: .85rem;">
+      <strong>{{ t.name }}</strong>
+      {% for col in t.columns %}
+        <span class="badge">{{ col }}</span>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<form method="POST" action="{{ url_for('import_email', path=schema_path) }}">
+  <div class="card">
+    <label for="text">Email content</label>
+    <textarea name="text" id="text" placeholder="Paste the full email text (including headers) here..."></textarea>
+    <div style="margin-top: 1rem;">
+      <button type="submit" class="btn btn-primary">Extract &amp; Store</button>
+      <a href="{{ url_for('schema_detail', path=schema_path) }}" class="btn btn-outline" style="margin-left: .5rem;">Cancel</a>
+    </div>
+  </div>
+</form>
+
+{% if result %}
+<div class="card">
+  <h2>Extraction Result</h2>
+  <div class="grid-2" style="margin: .75rem 0;">
+    <div>
+      <strong>Certainty</strong>
+      <div style="font-size: 1.2rem;" class="score {% if result.certainty and result.certainty >= 0.5 %}score-good{% else %}score-bad{% endif %}">
+        {{ "%.2f"|format(result.certainty) if result.certainty is not none else "N/A" }}
+      </div>
+    </div>
+    <div>
+      <strong>Spam Score</strong>
+      <div style="font-size: 1.2rem;" class="score {% if result.spam and result.spam < 0.5 %}score-good{% else %}score-bad{% endif %}">
+        {{ "%.2f"|format(result.spam) if result.spam is not none else "N/A" }}
+      </div>
+    </div>
+  </div>
+
+  {% if result.extracted %}
+    {% for t in schema.tables %}
+      {% set rows = result.extracted.get(t.name, []) %}
+      {% if rows %}
+        <div style="margin-top: 1rem;">
+          <h3>{{ t.name }} <span class="badge">{{ rows|length }} row(s)</span></h3>
+          {% if result.inserted.get(t.name) %}
+            <span class="badge score-good">{{ result.inserted[t.name] }} inserted</span>
+          {% else %}
+            <span class="badge score-bad">skipped</span>
+          {% endif %}
+          <div class="table-wrap">
+          <table style="font-size: .85rem;">
+            <thead>
+              <tr>
+                {% for col in t.columns %}
+                  <th>{{ col.name }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in rows %}
+                <tr>
+                  {% for col in t.columns %}
+                    <td>{{ row.get(col.name, '') if row.get(col.name) is not none else '<span class="meta">—</span>'|safe }}</td>
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          </div>
+        </div>
+      {% endif %}
+    {% endfor %}
+  {% else %}
+    <p class="meta">No data extracted — the AI found nothing relevant in this email.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
